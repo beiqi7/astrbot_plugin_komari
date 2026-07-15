@@ -1,0 +1,62 @@
+{
+  "base_url": {
+    "description": "Komari 面板地址",
+    "type": "string",
+    "hint": "在后台填写，例如 https://komari.example.com",
+    "default": "",
+    "obvious_hint": true
+  },
+  "api_key": {
+    "description": "API Key（可选）",
+    "type": "string",
+    "hint": "私有站或隐藏节点时填写",
+    "default": ""
+  },
+  "timeout": {
+    "description": "请求超时（秒）",
+    "type": "float",
+    "default": 10
+  },
+  "show_hidden": {
+    "description": "显示隐藏节点",
+    "type": "bool",
+    "default": false
+  },
+  "output_mode": {
+    "description": "输出样式",
+    "type": "string",
+    "hint": "card=高清图片卡片，text=纯文本",
+    "default": "card",
+    "options": ["card", "text"],
+    "obvious_hint": true
+  },
+  "permission_mode": {
+    "description": "指令使用权限",
+    "type": "string",
+    "hint": "all=所有人；admin=仅 AstrBot 管理员；whitelist=仅白名单用户（管理员始终可用）",
+    "default": "all",
+    "options": ["all", "admin", "whitelist"],
+    "obvious_hint": true
+  },
+  "allowed_users": {
+    "description": "白名单用户 ID",
+    "type": "string",
+    "hint": "permission_mode=whitelist 时生效。多个 ID 用英文逗号或换行分隔。可用 /sid 查看自己的 ID",
+    "default": ""
+  },
+  "image_quality": {
+    "description": "卡片清晰度",
+    "type": "string",
+    "hint": "normal=1x · high=1.3x · ultra=1.8x 高清大图（更清晰也更占流量）",
+    "default": "ultra",
+    "options": ["normal", "high", "ultra"],
+    "obvious_hint": true
+  },
+  "bg_url": {
+    "description": "卡片背景图接口",
+    "type": "string",
+    "hint": "二次元随机图地址，默认 https://mygo.pp.ua/ ，每次渲染会随机一张",
+    "default": "https://mygo.pp.ua/",
+    "obvious_hint": true
+  }
+}
