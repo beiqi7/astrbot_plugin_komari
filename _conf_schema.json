@@ -2,20 +2,39 @@
   "base_url": {
     "description": "Komari 面板地址",
     "type": "string",
-    "hint": "在后台填写，例如 https://komari.example.com",
+    "hint": "在后台填写，例如 https://komari.example.com。携带 API Key 时必须使用 HTTPS，且不允许包含 user:pass@。",
     "default": "",
     "obvious_hint": true
   },
   "api_key": {
     "description": "API Key（可选）",
     "type": "string",
-    "hint": "私有站或隐藏节点时填写",
+    "hint": "私有站或隐藏节点时填写。填写后 base_url 强制要求 HTTPS。",
     "default": ""
+  },
+  "allow_insecure": {
+    "description": "允许 HTTP / 内网地址",
+    "type": "bool",
+    "hint": "默认关闭。仅当 base_url 是 http 或内网地址时才需要开启；带 API Key 时仍强制 HTTPS。",
+    "default": false
   },
   "timeout": {
     "description": "请求超时（秒）",
     "type": "float",
+    "hint": "范围 1~60 秒，默认 10。",
     "default": 10
+  },
+  "cache_ttl": {
+    "description": "短期缓存秒数",
+    "type": "float",
+    "hint": "节点和状态结果的缓存时间，避免高频指令打满后端。范围 0~300 秒，默认 5。设为 0 关闭缓存。",
+    "default": 5
+  },
+  "cooldown_seconds": {
+    "description": "会话冷却秒数",
+    "type": "float",
+    "hint": "同一会话两次指令的最小间隔，避免滥用。范围 0~60 秒，默认 5。管理员免冷却。设为 0 关闭。",
+    "default": 5
   },
   "show_hidden": {
     "description": "显示隐藏节点",
@@ -33,8 +52,8 @@
   "permission_mode": {
     "description": "指令使用权限",
     "type": "string",
-    "hint": "all=所有人；admin=仅 AstrBot 管理员；whitelist=仅白名单用户（管理员始终可用）",
-    "default": "all",
+    "hint": "all=所有人；admin=仅 AstrBot 管理员（默认）；whitelist=仅白名单用户。未知值按 fail-closed 处理（仅管理员）。",
+    "default": "admin",
     "options": ["all", "admin", "whitelist"],
     "obvious_hint": true
   },
@@ -55,7 +74,7 @@
   "bg_url": {
     "description": "卡片背景图接口",
     "type": "string",
-    "hint": "二次元随机图地址，默认 https://mygo.pp.ua/ ，每次渲染会随机一张",
+    "hint": "二次元随机图地址，必须 HTTPS，禁止内网/file:/data:/javascript: 协议。默认 https://mygo.pp.ua/。校验失败时回退默认或纯色背景。",
     "default": "https://mygo.pp.ua/",
     "obvious_hint": true
   }

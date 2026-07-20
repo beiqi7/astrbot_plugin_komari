@@ -13,6 +13,7 @@ try:
         is_online,
         percent,
     )
+    from .utils import esc, safe_float, safe_int, is_safe_bg_url
 except ImportError:
     from formatter import (  # type: ignore
         human_bytes,
@@ -21,12 +22,28 @@ except ImportError:
         is_online,
         percent,
     )
+    from utils import (  # type: ignore
+        esc,
+        safe_float,
+        safe_int,
+        is_safe_bg_url,
+    )
 
 # 内容宽度（与 CSS 一致；高清靠 device_scale_factor 放大）
 WIDTH_SUMMARY = 960
 WIDTH_LIST = 960
 WIDTH_DETAIL = 900
 WIDTH_GROUP = 940
+
+# 字段长度上限：防止远端异常数据撑爆渲染
+MAX_NAME_LEN = 80
+MAX_TAG_LEN = 40
+MAX_REMARK_LEN = 200
+MAX_OS_LEN = 80
+MAX_GROUP_LEN = 60
+# 列表/分组单页最大节点数（防止生成超大图片）
+MAX_LIST_ROWS = 100
+MAX_GROUP_ROWS = 80
 
 
 def _level(online: bool, cpu: float, ram_p: float, disk_p: float = 0) -> str:
@@ -51,7 +68,7 @@ def build_node_view(
 ) -> dict[str, Any]:
     st = status or {}
     online = is_online(st)
-    cpu = float(st.get("cpu") or 0) if online else 0.0
+    cpu = safe_float(st.get("cpu"), 0.0, 0.0, 100.0) if online else 0.0
     ram_used = st.get("ram") or 0
     ram_total = st.get("ram_total") or node.get("mem_total") or 0
     disk_used = st.get("disk") or 0
@@ -60,11 +77,11 @@ def build_node_view(
     swap_total = st.get("swap_total") or node.get("swap_total") or 0
     ram_p = percent(ram_used, ram_total) if online else 0.0
     disk_p = percent(disk_used, disk_total) if online else 0.0
-    swap_p = percent(swap_used, swap_total) if online and swap_total else 0.0
+    swap_p = percent(swap_used, swap_total) if online else 0.0
 
-    cpu_name = str(node.get("cpu_name") or "-")
-    cpu_cores = node.get("cpu_cores") or 0
-    cpu_phys = node.get("cpu_physical_cores") or 0
+    cpu_name = esc(_short(node.get("cpu_name"), MAX_NAME_LEN), MAX_NAME_LEN + 4) or "-"
+    cpu_cores = safe_int(node.get("cpu_cores"), 0, minimum=0)
+    cpu_phys = safe_int(node.get("cpu_physical_cores"), 0, minimum=0)
     if cpu_phys and cpu_phys != cpu_cores:
         cores_label = f"{cpu_phys}P/{cpu_cores}T"
     elif cpu_cores:
@@ -72,40 +89,45 @@ def build_node_view(
     else:
         cores_label = "-"
 
-    gpu = str(node.get("gpu_name") or "")
-    if gpu.lower() in ("none", "null", "-"):
-        gpu = ""
+    gpu_raw = _short(node.get("gpu_name"), MAX_NAME_LEN)
+    if gpu_raw.lower() in ("none", "null", "-"):
+        gpu_raw = ""
+    gpu = esc(gpu_raw, MAX_NAME_LEN + 4)
 
-    tags = str(node.get("tags") or "")
-    tag_list = [t.strip() for t in tags.replace(",", ";").split(";") if t.strip()][:5]
+    tags_raw = str(node.get("tags") or "")
+    tag_list = [
+        esc(t.strip(), MAX_TAG_LEN)
+        for t in tags_raw.replace(",", ";").split(";")
+        if t.strip()
+    ][:5]
 
     load1 = st.get("load") if online else None
     load5 = st.get("load5") if online else None
     load15 = st.get("load15") if online else None
     load_str = "-"
     if online and load1 is not None:
-        parts = [f"{float(load1):.2f}"]
+        parts = [f"{safe_float(load1, 0.0, 0.0):.2f}"]
         if load5 is not None:
-            parts.append(f"{float(load5):.2f}")
+            parts.append(f"{safe_float(load5, 0.0, 0.0):.2f}")
         if load15 is not None:
-            parts.append(f"{float(load15):.2f}")
+            parts.append(f"{safe_float(load15, 0.0, 0.0):.2f}")
         load_str = " / ".join(parts)
 
     temp = st.get("temp")
     temp_str = ""
     if online and temp is not None:
-        try:
-            tv = float(temp)
-            if tv > 0:
-                temp_str = f"{tv:.0f}°C"
-        except (TypeError, ValueError):
-            pass
+        tv = safe_float(temp, -1.0)
+        if tv > 0:
+            temp_str = f"{tv:.0f}°C"
 
+    name_raw = _short(node.get("name"), MAX_NAME_LEN) or "未命名"
+    region_raw = _short(node.get("region"), MAX_NAME_LEN)
+    group_raw = _short((node.get("group") or "").strip(), MAX_GROUP_LEN) or "未分组"
     return {
         "index": index,
-        "name": node.get("name") or "未命名",
-        "region": node.get("region") or "",
-        "group": (node.get("group") or "").strip() or "未分组",
+        "name": esc(name_raw, MAX_NAME_LEN + 4),
+        "region": esc(region_raw, MAX_NAME_LEN + 4),
+        "group": esc(group_raw, MAX_GROUP_LEN + 4),
         "tags": tag_list,
         "online": online,
         "level": _level(online, cpu, ram_p, disk_p),
@@ -113,7 +135,7 @@ def build_node_view(
         "cpu": round(cpu, 1),
         "cpu_w": round(min(100.0, max(0.0, cpu)), 1),
         "cpu_name": cpu_name,
-        "cpu_name_short": _short(cpu_name, 36),
+        "cpu_name_short": esc(_short(node.get("cpu_name"), 36), 40),
         "cpu_cores": cpu_cores or "-",
         "cores_label": cores_label,
         # 内存 / 磁盘 / 交换
@@ -142,11 +164,11 @@ def build_node_view(
         "mem_total": human_bytes(node.get("mem_total")),
         "disk_total": human_bytes(node.get("disk_total")),
         # 系统
-        "os": _short(node.get("os"), 48) or "-",
-        "kernel": _short(node.get("kernel_version"), 36) or "-",
-        "arch": node.get("arch") or "-",
-        "virt": node.get("virtualization") or "-",
-        "gpu": _short(gpu, 40),
+        "os": esc(_short(node.get("os"), MAX_OS_LEN), MAX_OS_LEN + 4) or "-",
+        "kernel": esc(_short(node.get("kernel_version"), 36), 40) or "-",
+        "arch": esc(_short(node.get("arch"), 20), 24) or "-",
+        "virt": esc(_short(node.get("virtualization"), 24), 28) or "-",
+        "gpu": gpu,
         # 网络 / 运行
         "net_in": human_speed(st.get("net_in") or 0) if online else "-",
         "net_out": human_speed(st.get("net_out") or 0) if online else "-",
@@ -154,11 +176,11 @@ def build_node_view(
         "traffic_up": human_bytes(st.get("net_total_up") or 0) if online else "-",
         "load": load_str,
         "temp": temp_str,
-        "process": st.get("process") if online else None,
-        "tcp": st.get("connections") if online else None,
-        "udp": st.get("connections_udp") if online else None,
+        "process": safe_int(st.get("process"), 0, minimum=0) if online else None,
+        "tcp": safe_int(st.get("connections"), 0, minimum=0) if online else None,
+        "udp": safe_int(st.get("connections_udp"), 0, minimum=0) if online else None,
         "uptime": human_uptime(st.get("uptime")) if online else "-",
-        "remark": _short(node.get("public_remark"), 60),
+        "remark": esc(_short(node.get("public_remark"), MAX_REMARK_LEN), MAX_REMARK_LEN + 4),
     }
 
 
@@ -178,10 +200,11 @@ def build_summary_data(
     for n in nodes:
         st = status_map.get(n.get("uuid") or "")
         on = is_online(st)
-        g = (n.get("group") or "").strip() or "未分组"
-        if g not in groups:
-            groups[g] = {
-                "name": g,
+        g_raw = _short((n.get("group") or "").strip(), MAX_GROUP_LEN) or "未分组"
+        # 同一分组名在 OrderedDict 里以未转义形式聚合，渲染时统一转义
+        if g_raw not in groups:
+            groups[g_raw] = {
+                "name": g_raw,
                 "total": 0,
                 "online": 0,
                 "offline": 0,
@@ -191,54 +214,39 @@ def build_summary_data(
                 "mem": 0,
                 "disk": 0,
             }
-        groups[g]["total"] += 1
+        groups[g_raw]["total"] += 1
 
-        try:
-            cores = int(n.get("cpu_cores") or 0)
-        except (TypeError, ValueError):
-            cores = 0
-        try:
-            mem_t = int(n.get("mem_total") or 0)
-        except (TypeError, ValueError):
-            mem_t = 0
-        try:
-            disk_t = int(n.get("disk_total") or 0)
-        except (TypeError, ValueError):
-            disk_t = 0
+        cores = safe_int(n.get("cpu_cores"), 0, minimum=0)
+        mem_t = safe_int(n.get("mem_total"), 0, minimum=0)
+        disk_t = safe_int(n.get("disk_total"), 0, minimum=0)
 
         # 硬件总量（全部节点，含离线）
         total_cores += cores
         total_mem += mem_t
         total_disk += disk_t
-        groups[g]["cores"] += cores
-        groups[g]["mem"] += mem_t
-        groups[g]["disk"] += disk_t
+        groups[g_raw]["cores"] += cores
+        groups[g_raw]["mem"] += mem_t
+        groups[g_raw]["disk"] += disk_t
 
         if on:
             online += 1
-            groups[g]["online"] += 1
-            c = float(st.get("cpu") or 0)
+            groups[g_raw]["online"] += 1
+            c = safe_float(st.get("cpu"), 0.0, 0.0, 100.0)
             cpu_pct_sum += c
             cpu_n += 1
-            groups[g]["cpu_sum"] += c
-            groups[g]["cpu_n"] += 1
+            groups[g_raw]["cpu_sum"] += c
+            groups[g_raw]["cpu_n"] += 1
             ram_pct_sum += percent(
                 st.get("ram"), st.get("ram_total") or mem_t
             )
             disk_pct_sum += percent(
                 st.get("disk"), st.get("disk_total") or disk_t
             )
-            try:
-                used_mem += int(st.get("ram") or 0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                used_disk += int(st.get("disk") or 0)
-            except (TypeError, ValueError):
-                pass
+            used_mem += safe_int(st.get("ram"), 0, minimum=0)
+            used_disk += safe_int(st.get("disk"), 0, minimum=0)
         else:
             offline += 1
-            groups[g]["offline"] += 1
+            groups[g_raw]["offline"] += 1
 
     group_list = []
     for g in groups.values():
@@ -250,6 +258,8 @@ def build_summary_data(
         g["cores_label"] = f"{g['cores']}核"
         g["mem_label"] = human_bytes(g["mem"])
         g["disk_label"] = human_bytes(g["disk"])
+        # 渲染前对分组名做转义
+        g["name"] = esc(g["name"], MAX_GROUP_LEN + 4)
         group_list.append(g)
 
     return {
@@ -277,7 +287,10 @@ def build_list_data(
 ) -> dict[str, Any]:
     rows = []
     online = 0
-    for i, n in enumerate(nodes, 1):
+    # 限制列表行数，避免超大图片
+    visible_nodes = nodes[:MAX_LIST_ROWS]
+    truncated = len(nodes) - len(visible_nodes)
+    for i, n in enumerate(visible_nodes, 1):
         st = status_map.get(n.get("uuid") or "")
         view = build_node_view(n, st, i)
         rows.append(view)
@@ -286,8 +299,9 @@ def build_list_data(
     return {
         "total": len(nodes),
         "online": online,
-        "offline": len(nodes) - online,
+        "offline": len(visible_nodes) - online,
         "rows": rows,
+        "truncated": truncated,
         "page_width": WIDTH_LIST,
     }
 
@@ -299,7 +313,7 @@ def build_group_data(
 ) -> dict[str, Any]:
     buckets: OrderedDict[str, list] = OrderedDict()
     for i, n in enumerate(nodes, 1):
-        g = (n.get("group") or "").strip() or "未分组"
+        g = _short((n.get("group") or "").strip(), MAX_GROUP_LEN) or "未分组"
         st = status_map.get(n.get("uuid") or "")
         view = build_node_view(n, st, i)
         buckets.setdefault(g, []).append(view)
@@ -309,19 +323,25 @@ def build_group_data(
     for gname, items in buckets.items():
         if q and q not in gname.lower() and gname.lower() != q:
             continue
-        on = sum(1 for x in items if x["online"])
+        # 每组限制行数
+        visible = items[:MAX_GROUP_ROWS]
+        on = sum(1 for x in visible if x["online"])
         sections.append(
             {
-                "name": gname,
+                "name": esc(gname, MAX_GROUP_LEN + 4),
                 "total": len(items),
                 "online": on,
-                "offline": len(items) - on,
-                "rows": items,
+                "offline": len(visible) - on,
+                "rows": visible,
+                "truncated": len(items) - len(visible),
             }
         )
 
     return {
-        "title": f"分类 · {group_query}" if group_query else "服务器分类",
+        "title": esc(
+            f"分类 · {group_query}" if group_query else "服务器分类",
+            MAX_GROUP_LEN * 2 + 8,
+        ),
         "sections": sections,
         "section_count": len(sections),
         "total": sum(s["total"] for s in sections),
@@ -330,6 +350,16 @@ def build_group_data(
 
 
 DEFAULT_BG_URL = "https://mygo.pp.ua/"
+
+
+def safe_bg_url(url: str) -> str:
+    """校验背景图 URL；不合法返回空字符串（由模板使用 fallback）。"""
+    if not url:
+        return ""
+    ok, cleaned = is_safe_bg_url(url)
+    if not ok:
+        return ""
+    return cleaned
 
 
 def screenshot_options(width: int, quality: str = "ultra") -> dict:
@@ -810,12 +840,21 @@ th.metric-col { text-align: right; }
 
 
 def _doc(width: int, body: str) -> str:
-    """二次元玻璃卡片：随机二次元底图 + 毛玻璃内容层。"""
+    """二次元玻璃卡片：随机二次元底图 + 毛玻璃内容层。
+
+    渲染时使用 CSP 限制：
+    - default-src 'none'：默认拒绝所有
+    - img-src https: data:：背景图仅允许 https 或 data
+    - style-src 'unsafe-inline'：内联样式
+    - 禁止 script / iframe / 等
+    模板里 {{ bg_url }} 必须是经过 safe_bg_url 校验的 https URL 或空串。
+    """
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width={width}, height=480">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; font-src https: data:;">
 <style>
 {CSS}
 html, body {{ width: {width}px; max-width: {width}px; }}
@@ -825,7 +864,7 @@ html, body {{ width: {width}px; max-width: {width}px; }}
 <body>
 <div class="page">
   <div class="bg-fallback"></div>
-  <img class="bg-img" src="{{{{ bg_url }}}}" alt="" />
+  {{% if bg_url %}}<img class="bg-img" src="{{{{ bg_url }}}}" alt="" />{{% endif %}}
   <div class="veil"></div>
   <div class="content">
 {body}

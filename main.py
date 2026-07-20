@@ -25,6 +25,7 @@ try:
         build_list_data,
         build_node_view,
         build_summary_data,
+        safe_bg_url,
         screenshot_options,
     )
     from .formatter import (
@@ -35,6 +36,7 @@ try:
         format_summary,
     )
     from .komari_client import KomariClient, KomariError
+    from .utils import Cooldown, sanitize_for_log
 except ImportError:
     from cards import (  # type: ignore
         DEFAULT_BG_URL,
@@ -50,6 +52,7 @@ except ImportError:
         build_list_data,
         build_node_view,
         build_summary_data,
+        safe_bg_url,
         screenshot_options,
     )
     from formatter import (  # type: ignore
@@ -60,17 +63,19 @@ except ImportError:
         format_summary,
     )
     from komari_client import KomariClient, KomariError  # type: ignore
+    from utils import Cooldown, sanitize_for_log  # type: ignore
 
 
 @register(
     "astrbot_plugin_komari",
     "serenite",
     "Komari 服务器监控：概况 / 列表 / 单机 / 分类",
-    "1.4.9",
+    "1.5.0",
 )
 class KomariPlugin(Star):
     # 模糊多选缓存：序号对应「上一次候选列表」，而非全量 list 序号
     _PICK_TTL = 300  # 秒（5 分钟）
+    _PICK_MAX = 1000  # 候选缓存最大条目数
 
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
@@ -78,13 +83,41 @@ class KomariPlugin(Star):
         self.client = self._build_client()
         # key -> {"ts": float, "uuids": [str, ...], "query": str}
         self._pick_cache: dict[str, dict] = {}
+        # 用户/会话冷却
+        self._cooldown = Cooldown(self._cooldown_seconds())
+
+    # ---------- 配置读取 ----------
+
+    def _cooldown_seconds(self) -> float:
+        try:
+            v = float(self.config.get("cooldown_seconds", 5) or 5)
+        except (TypeError, ValueError):
+            v = 5.0
+        if v != v or v in (float("inf"), float("-inf")):
+            v = 5.0
+        return max(0.0, min(60.0, v))
+
+    def _cache_ttl(self) -> float:
+        try:
+            v = float(self.config.get("cache_ttl", 5) or 5)
+        except (TypeError, ValueError):
+            v = 5.0
+        if v != v or v in (float("inf"), float("-inf")):
+            v = 5.0
+        return max(0.0, min(300.0, v))
 
     def _build_client(self) -> KomariClient:
+        try:
+            timeout = float(self.config.get("timeout", 10) or 10)
+        except (TypeError, ValueError):
+            timeout = 10.0
         return KomariClient(
             base_url=str(self.config.get("base_url", "") or ""),
             api_key=str(self.config.get("api_key", "") or ""),
-            timeout=float(self.config.get("timeout", 10) or 10),
+            timeout=timeout,
             show_hidden=bool(self.config.get("show_hidden", False)),
+            allow_insecure=bool(self.config.get("allow_insecure", False)),
+            cache_ttl=self._cache_ttl(),
         )
 
     def _reload_client(self) -> None:
@@ -94,10 +127,17 @@ class KomariPlugin(Star):
             or new.api_key != self.client.api_key
             or abs(new.timeout - self.client.timeout) > 1e-6
             or new.show_hidden != self.client.show_hidden
+            or new.allow_insecure != self.client.allow_insecure
+            or abs(new._nodes_cache.ttl - self.client._nodes_cache.ttl) > 1e-6
         )
         if not changed:
             return
         old = self.client
+        try:
+            # 启动期校验：失败仅记录，不抛
+            new.validate()
+        except ValueError as e:
+            logger.warning(f"Komari 配置校验失败: {sanitize_for_log(str(e))}")
         self.client = new
         try:
             loop = asyncio.get_event_loop()
@@ -115,11 +155,21 @@ class KomariPlugin(Star):
         return q if q in ("normal", "high", "ultra") else "ultra"
 
     def _bg_url(self) -> str:
-        """二次元背景图接口；带时间戳避免缓存同一张。"""
+        """二次元背景图接口；带时间戳避免缓存同一张。
+
+        返回经 safe_bg_url 校验的 https URL 或空串（由模板回退）。
+        """
         base = str(self.config.get("bg_url", "") or DEFAULT_BG_URL).strip()
         if not base:
             base = DEFAULT_BG_URL
-        base = base.rstrip("/")
+        base = safe_bg_url(base.rstrip("/"))
+        if not base:
+            logger.warning(
+                "bg_url 校验失败，使用默认背景或回退。bg_url 必须是 https 且非内网地址。"
+            )
+            base = safe_bg_url(DEFAULT_BG_URL.rstrip("/"))
+            if not base:
+                return ""
         # 随机图接口：加 query 防止文转图缓存
         sep = "&" if "?" in base else "?"
         return f"{base}{sep}_t={int(time.time() * 1000)}"
@@ -135,8 +185,8 @@ class KomariPlugin(Star):
         return {p.strip() for p in parts if p.strip()}
 
     def _check_permission(self, event: AstrMessageEvent) -> tuple[bool, str]:
-        """返回 (是否允许, 拒绝时的提示)。"""
-        mode = str(self.config.get("permission_mode", "all") or "all").lower()
+        """返回 (是否允许, 拒绝时的提示)。未知模式 fail closed。"""
+        mode = str(self.config.get("permission_mode", "admin") or "admin").lower()
         if mode in ("", "all", "everyone", "public"):
             return True, ""
 
@@ -147,6 +197,7 @@ class KomariPlugin(Star):
         except Exception:
             is_admin = False
 
+        # admin / whitelist 模式下管理员始终可用
         if mode in ("admin", "admins", "管理员"):
             if is_admin:
                 return True, ""
@@ -164,10 +215,29 @@ class KomariPlugin(Star):
                 "（管理员可在插件配置里添加 allowed_users，或用 /sid 查看自己的 ID）",
             )
 
-        # 未知模式当作 all
-        return True, ""
+        # 未知模式 fail closed：仅管理员可用
+        logger.warning(
+            f"未知 permission_mode={mode!r}，按 fail closed 处理（仅管理员可用）"
+        )
+        if is_admin:
+            return True, ""
+        return False, "⛔ 权限配置异常，请联系管理员。"
+
+    def _check_cooldown(self, event: AstrMessageEvent) -> tuple[bool, float, str]:
+        """会话级冷却；返回 (是否允许, 剩余秒, key)。"""
+        key = self._session_key(event)
+        ok, wait = self._cooldown.check(key)
+        return ok, wait, key
 
     async def initialize(self):
+        # 启动期校验配置
+        try:
+            self.client.validate()
+        except ValueError as e:
+            logger.warning(
+                f"Komari 配置校验失败: {sanitize_for_log(str(e))}；"
+                "插件仍会加载但可能无法正常工作"
+            )
         if self.client.configured():
             logger.info(f"Komari 插件已加载：{self.client.base_url}")
         else:
@@ -196,7 +266,7 @@ class KomariPlugin(Star):
     def _save_pick_cache(self, event: AstrMessageEvent, query: str, nodes: list[dict]) -> None:
         """保存模糊多选候选，供后续 /km 1 选择。"""
         now = time.time()
-        # 清理过期
+        # 清理过期（每次写入顺便清理全局）
         expired = [
             k
             for k, v in self._pick_cache.items()
@@ -204,6 +274,18 @@ class KomariPlugin(Star):
         ]
         for k in expired:
             self._pick_cache.pop(k, None)
+
+        # 容量上限：超出时按最旧淘汰
+        while len(self._pick_cache) >= self._PICK_MAX:
+            # 找到 ts 最旧的条目
+            oldest_key = min(
+                self._pick_cache.keys(),
+                key=lambda k: float(self._pick_cache[k].get("ts") or 0),
+                default=None,
+            )
+            if not oldest_key:
+                break
+            self._pick_cache.pop(oldest_key, None)
 
         uuids = [str(n.get("uuid") or "") for n in nodes if n.get("uuid")]
         if not uuids:
@@ -273,9 +355,23 @@ class KomariPlugin(Star):
         if not self.client.configured():
             yield event.plain_result(
                 "⚠️ 未配置面板地址。\n"
-                "请到 AstrBot 后台 → 插件 → Komari 探针 填写 base_url。"
+                "请到 AstrBot 后台 -> 插件 -> Komari 探针 填写 base_url。"
             )
             return
+
+        # 会话级冷却（管理员免冷却）
+        is_admin = False
+        try:
+            is_admin = bool(event.is_admin())
+        except Exception:
+            is_admin = False
+        if not is_admin:
+            cd_ok, wait, _ = self._check_cooldown(event)
+            if not cd_ok:
+                yield event.plain_result(
+                    f"⏳ 指令太快，请等待 {wait:.1f} 秒后再试。"
+                )
+                return
 
         args = self._parse_args(event)
         if not args:
@@ -310,11 +406,13 @@ class KomariPlugin(Star):
                 async for m in self._cmd_one(event, " ".join(args).strip()):
                     yield m
         except KomariError as e:
-            logger.error(f"Komari 失败: {e}")
-            yield event.plain_result(f"❌ 请求失败：{e}")
+            # 群里只暴露简短信息；详细错误进日志
+            logger.error(f"Komari 失败: {sanitize_for_log(str(e))}")
+            yield event.plain_result(getattr(e, "public", None) or "❌ 请求失败")
         except Exception as e:
+            # 不向群里暴露内部异常细节
             logger.exception("Komari 插件异常")
-            yield event.plain_result(f"❌ 插件错误：{e}")
+            yield event.plain_result("❌ 插件内部错误，请联系管理员。")
 
     async def _cmd_summary(self, event: AstrMessageEvent):
         nodes, status_map = await self._fetch_all()

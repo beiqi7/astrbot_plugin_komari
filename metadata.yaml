@@ -1,6 +1,6 @@
 name: astrbot_plugin_komari
 display_name: Komari 探针
-desc: 二次元玻璃拟态高清监控卡片：概况、列表、单机、分类；支持指令权限。
-version: v1.4.9
+desc: 二次元玻璃拟态高清监控卡片：概况、列表、单机、分类；支持指令权限、冷却、缓存与安全校验。
+version: v1.5.0
 author: serenite
 repo: https://github.com/serenite/astrbot_plugin_komari

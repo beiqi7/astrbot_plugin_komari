@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Exclude build artifacts from release archives (git archive)
+.git            export-ignore
+.gitignore      export-ignore
+.gitattributes  export-ignore
+*.zip           export-ignore
+__pycache__     export-ignore
+*.pyc           export-ignore
+*.pyo           export-ignore
