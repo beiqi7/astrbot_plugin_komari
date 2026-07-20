@@ -70,7 +70,7 @@ except ImportError:
     "astrbot_plugin_komari",
     "serenite",
     "Komari 服务器监控：概况 / 列表 / 单机 / 分类",
-    "1.5.0",
+    "2.0.0",
 )
 class KomariPlugin(Star):
     # 模糊多选缓存：序号对应「上一次候选列表」，而非全量 list 序号

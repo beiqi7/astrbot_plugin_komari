@@ -3,7 +3,7 @@
 AstrBot 插件：对接 [Komari](https://github.com/komari-monitor/komari) 探针，在 QQ 群发送**高清服务器监控卡片**。
 
 **Author:** serenite  
-**Version:** v1.5.0  
+**Version:** v2.0.0  
 **Repo:** https://github.com/beiqi7/astrbot_plugin_komari
 
 - 概况汇总 CPU 核心、内存、硬盘总数与已用量，按分组展示在线率  
