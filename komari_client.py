@@ -185,13 +185,20 @@ class KomariClient:
                     except ValueError:
                         pass
 
-                # 受限读取：超过上限立即中止
-                body = await resp.content.read(_MAX_RESPONSE_BYTES + 1)
-                if len(body) > _MAX_RESPONSE_BYTES:
-                    raise KomariError(
-                        f"响应体超过 {_MAX_RESPONSE_BYTES} bytes",
-                        public="❌ 面板返回数据过大",
-                    )
+                # 受限读取：分块读取直到 EOF 或超限
+                # 注意：resp.content.read(n) 只保证读到 <= n 字节，遇到第一个 TCP
+                # 分段就返回，不会等待完整响应体。必须用 iter_chunked 循环读完。
+                body_chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.content.iter_chunked(65536):
+                    total += len(chunk)
+                    if total > _MAX_RESPONSE_BYTES:
+                        raise KomariError(
+                            f"响应体超过 {_MAX_RESPONSE_BYTES} bytes",
+                            public="❌ 面板返回数据过大",
+                        )
+                    body_chunks.append(chunk)
+                body = b"".join(body_chunks)
                 try:
                     text = body.decode("utf-8", errors="replace")
                 except Exception:
